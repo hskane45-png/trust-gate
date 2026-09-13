@@ -1,0 +1,19 @@
+# Render Blueprint — free web service ($0 Hobby plan)
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: trust-gate
+    runtime: node
+    plan: free
+    buildCommand: npm i && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: MOCK_MODE
+        value: "1"
+      - key: ADMIN_TOKEN
+        sync: false # set in Render dashboard (placeholder — do not commit secrets)
+      - key: PORT
+        value: "8787"
+      - key: HOST
+        value: "0.0.0.0"
