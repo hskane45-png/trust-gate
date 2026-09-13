@@ -1,6 +1,7 @@
 /**
  * Ed25519 signed receipts + JWKS.
  * Keypair from RECEIPT_PRIVATE_KEY env or stable .data/keys.json on first boot.
+ * Never crashes boot: FS / invalid-env failures fall back to ephemeral in-memory keys.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -52,11 +53,20 @@ function keysPath(): string {
   return join(dataDir(), "keys.json");
 }
 
-function loadOrCreateKeys(): KeyMaterial {
-  if (cachedKeys) return cachedKeys;
+function materialFromKeyPair(kp: nacl.SignKeyPair, kidPrefix: string): KeyMaterial {
+  const kid =
+    kidPrefix + createHash("sha256").update(kp.publicKey).digest("hex").slice(0, 16);
+  return {
+    kid,
+    publicKeyBase64: encodeBase64(kp.publicKey),
+    secretKeyBase64: encodeBase64(kp.secretKey),
+  };
+}
 
+function tryLoadFromEnv(): KeyMaterial | null {
   const envKey = process.env.RECEIPT_PRIVATE_KEY;
-  if (envKey) {
+  if (!envKey) return null;
+  try {
     const raw = Buffer.from(envKey.replace(/^0x/, ""), "hex");
     let kp: nacl.SignKeyPair;
     if (raw.length === 64) {
@@ -64,33 +74,74 @@ function loadOrCreateKeys(): KeyMaterial {
     } else if (raw.length === 32) {
       kp = nacl.sign.keyPair.fromSeed(new Uint8Array(raw));
     } else {
-      throw new Error("RECEIPT_PRIVATE_KEY must be 32-byte seed or 64-byte secret key hex");
+      console.warn(
+        "RECEIPT_PRIVATE_KEY must be 32-byte seed or 64-byte secret key hex; ignoring"
+      );
+      return null;
     }
-    const kid = "env-" + createHash("sha256").update(kp.publicKey).digest("hex").slice(0, 16);
-    cachedKeys = {
-      kid,
-      publicKeyBase64: encodeBase64(kp.publicKey),
-      secretKeyBase64: encodeBase64(kp.secretKey),
-    };
-    return cachedKeys;
+    return materialFromKeyPair(kp, "env-");
+  } catch (err) {
+    console.warn(
+      "RECEIPT_PRIVATE_KEY unusable; falling back to file/ephemeral:",
+      err instanceof Error ? err.message : err
+    );
+    return null;
   }
+}
 
+function tryLoadFromDisk(): KeyMaterial | null {
   const path = keysPath();
-  if (existsSync(path)) {
+  try {
+    if (!existsSync(path)) return null;
     const parsed = JSON.parse(readFileSync(path, "utf8")) as KeyMaterial;
-    cachedKeys = parsed;
+    if (
+      !parsed?.kid ||
+      !parsed?.publicKeyBase64 ||
+      !parsed?.secretKeyBase64
+    ) {
+      console.warn("keys.json missing fields; regenerating");
+      return null;
+    }
+    return parsed;
+  } catch (err) {
+    console.warn(
+      "Failed to read keys file; regenerating:",
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+function tryPersist(material: KeyMaterial): void {
+  const path = keysPath();
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(material, null, 2), { mode: 0o600 });
+  } catch (err) {
+    console.warn(
+      "Could not persist keys to disk (ephemeral in-memory keys for this process):",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+function loadOrCreateKeys(): KeyMaterial {
+  if (cachedKeys) return cachedKeys;
+
+  const fromEnv = tryLoadFromEnv();
+  if (fromEnv) {
+    cachedKeys = fromEnv;
     return cachedKeys;
   }
 
-  const kp = nacl.sign.keyPair();
-  const kid = "boot-" + createHash("sha256").update(kp.publicKey).digest("hex").slice(0, 16);
-  const material: KeyMaterial = {
-    kid,
-    publicKeyBase64: encodeBase64(kp.publicKey),
-    secretKeyBase64: encodeBase64(kp.secretKey),
-  };
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(material, null, 2), { mode: 0o600 });
+  const fromDisk = tryLoadFromDisk();
+  if (fromDisk) {
+    cachedKeys = fromDisk;
+    return cachedKeys;
+  }
+
+  const material = materialFromKeyPair(nacl.sign.keyPair(), "boot-");
+  tryPersist(material);
   cachedKeys = material;
   return material;
 }

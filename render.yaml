@@ -1,5 +1,6 @@
 # Render Blueprint — free web service ($0 Hobby plan)
 # Docs: https://render.com/docs/blueprint-spec
+# Prefer Node runtime (no Docker). Docker also works via Dockerfile in repo root.
 services:
   - type: web
     name: trust-gate
@@ -13,7 +14,6 @@ services:
         value: "1"
       - key: ADMIN_TOKEN
         sync: false # set in Render dashboard (placeholder — do not commit secrets)
-      - key: PORT
-        value: "8787"
       - key: HOST
         value: "0.0.0.0"
+      # Do NOT set PORT — Render injects it; the app binds to process.env.PORT

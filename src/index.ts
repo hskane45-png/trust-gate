@@ -21,8 +21,16 @@ import { loadSanctionsList } from "./signals/wallet.js";
 initPolicies();
 const sanctionsMeta = loadSanctionsList();
 console.log(`Sanctions loaded: ${sanctionsMeta.count} addresses (${sanctionsMeta.source})`);
-// Ensure keys exist at boot
-getKeys();
+// Ensure keys exist at boot (never crash — receipt.ts falls back to ephemeral)
+try {
+  const keys = getKeys();
+  console.log(`Receipt keys ready (kid=${keys.kid})`);
+} catch (err) {
+  console.warn(
+    "getKeys() unexpected failure at boot (continuing):",
+    err instanceof Error ? err.message : err
+  );
+}
 
 const app = new Hono();
 app.use("*", cors());
